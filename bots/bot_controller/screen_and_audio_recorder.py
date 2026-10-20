@@ -3,6 +3,8 @@ import os
 import subprocess
 import time
 
+from bots.bot_controller.bot_audio_device import current_sink
+
 logger = logging.getLogger(__name__)
 
 
@@ -62,7 +64,7 @@ class ScreenAndAudioRecorder:
 
             self.xterm_proc = subprocess.Popen(["xterm", "-bg", "black", "-fg", "black", "-geometry", f"{sw}x{sh}+{x}+{y}", "-xrm", "*borderWidth:0", "-xrm", "*scrollBar:false"])
 
-            subprocess.run(["pactl", "set-sink-mute", "@DEFAULT_SINK@", "1"], check=True)
+            subprocess.run(["pactl", "set-sink-mute", current_sink(), "1"], check=True)
             self.paused = True
             return True
         except Exception as e:
@@ -78,7 +80,7 @@ class ScreenAndAudioRecorder:
             self.xterm_proc.terminate()
             self.xterm_proc.wait()
             self.xterm_proc = None
-            subprocess.run(["pactl", "set-sink-mute", "@DEFAULT_SINK@", "0"], check=True)
+            subprocess.run(["pactl", "set-sink-mute", current_sink(), "0"], check=True)
             self.paused = False
             return True
         except Exception as e:
