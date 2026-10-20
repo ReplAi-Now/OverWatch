@@ -1,0 +1,8 @@
+"permissions": {
+  "allow": [
+    "Bash(psql \"$PROD_DB_RO\":*)",
+    "Bash(psql \"$STAGING_DB_RO\":*)",
+    "Bash(psql \"$ADMIN_DB_RO\":*)",
+    "Bash(psql \"$OVERWATCH_DB_RO\":*)"
+  ]
+}
