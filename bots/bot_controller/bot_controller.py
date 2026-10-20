@@ -16,6 +16,7 @@ from django.utils import timezone
 
 from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
 from bots.bot_adapter import BotAdapter
+from bots.bot_controller.bot_audio_device import BotAudioDevice
 from bots.bot_controller.bot_websocket_client_manager import BotWebsocketClientManager
 from bots.bot_controller.main_thread_executor import MainThreadExecutor
 from bots.bot_sso_utils import create_google_meet_sign_in_session
@@ -729,6 +730,9 @@ class BotController:
             logger.info("Telling websocket client manager to cleanup...")
             self.websocket_client_manager.cleanup()
 
+        if getattr(self, "bot_audio_device", None):
+            self.bot_audio_device.remove()
+
         if self.get_recording_file_location():
             self.upload_recording_to_external_media_storage_if_enabled()
 
@@ -906,6 +910,10 @@ class BotController:
         self.run_called = True
 
         self.connect_to_redis()
+
+        # Before anything that plays or records audio starts, so they all pick up this bot's own sink
+        self.bot_audio_device = BotAudioDevice(self.bot_in_db.object_id)
+        self.bot_audio_device.create()
 
         # Initialize core objects
         # Only used for adapters that can provide per-participant audio
