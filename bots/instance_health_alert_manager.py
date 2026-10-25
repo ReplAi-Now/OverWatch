@@ -4,6 +4,9 @@ from enum import Enum
 
 import requests
 from django.conf import settings
+from django.db.models import Q
+from django.db.models.functions import Coalesce
+from django.utils import timezone
 
 from .instance_health_utils import (
     CONNECTION_DANGER_PERCENTAGE,
@@ -13,7 +16,7 @@ from .instance_health_utils import (
     celery_queue_has_not_decreased_for,
     celery_workers_have_been_down_for,
 )
-from .models import InstanceHealthAlertsState
+from .models import Bot, BotStates, InstanceHealthAlertsState
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +28,7 @@ class InstanceHealthAlertTypes(str, Enum):
     CELERY_QUEUE_NOT_DRAINING = "celery_queue_not_draining"
     BOT_FATAL_ERROR_COUNT_EXCEEDS_THRESHOLD = "bot_fatal_error_count_exceeds_threshold"
     BOT_FATAL_ERROR_PERCENTAGE_EXCEEDS_THRESHOLD = "bot_fatal_error_percentage_exceeds_threshold"
+    BOT_NOT_LAUNCHED_BY_JOIN_TIME = "bot_not_launched_by_join_time"
 
 
 DEFAULT_ALERT_STATE = {"active": False}
@@ -56,7 +60,15 @@ DEFAULT_ALERT_SETTINGS = {
         "enabled": True,
         "threshold": 10,
     },
+    InstanceHealthAlertTypes.BOT_NOT_LAUNCHED_BY_JOIN_TIME: {
+        "enabled": True,
+        "threshold": 5 * 60,
+    },
 }
+
+# A bot whose join time is further back than this is left to the never-launched cleanup
+# rather than keeping the alert firing for good.
+BOT_NOT_LAUNCHED_BY_JOIN_TIME_LOOKBACK = timezone.timedelta(hours=24)
 
 # The percentage alert stays quiet until at least this many bots have finished inside
 # the window, so that one failure out of two bots on a quiet instance is not a 50%
@@ -110,7 +122,30 @@ ALERT_METADATA = {
         "step": "1",
         "display_factor": 1,
     },
+    InstanceHealthAlertTypes.BOT_NOT_LAUNCHED_BY_JOIN_TIME: {
+        "label": "Bot not launched by its join time",
+        "description": "Fires when a bot has not started running this long after its join time (or after it was created, for a bot asked to join now). Usually means every worker slot is taken.",
+        "unit_label": "minutes",
+        "step": "1",
+        "display_factor": 60,
+    },
 }
+
+
+def bots_not_launched_by_join_time(threshold_seconds):
+    """Bots due to have started threshold_seconds ago that have never sent a heartbeat.
+
+    A bot sends its first heartbeat as soon as a worker starts running it, so a missing
+    heartbeat past the join time means it is still waiting for a worker. Ad-hoc bots have
+    no join_at and are due as soon as they are created.
+    """
+    now = timezone.now()
+    return Bot.objects.annotate(due_at=Coalesce("join_at", "created_at")).filter(
+        Q(state__in=[BotStates.READY, BotStates.SCHEDULED, BotStates.STAGED, BotStates.JOINING]),
+        first_heartbeat_timestamp__isnull=True,
+        due_at__lte=now - timezone.timedelta(seconds=threshold_seconds),
+        due_at__gte=now - BOT_NOT_LAUNCHED_BY_JOIN_TIME_LOOKBACK,
+    )
 
 
 def _alert_is_firing(alert, config):
@@ -142,6 +177,9 @@ def _alert_is_firing(alert, config):
             return False
         percentage = fatal_errors.get("fatal_error_percentage")
         return percentage is not None and percentage >= config["threshold"]
+
+    if alert is InstanceHealthAlertTypes.BOT_NOT_LAUNCHED_BY_JOIN_TIME:
+        return bots_not_launched_by_join_time(config["threshold"]).exists()
 
     return False
 

@@ -19,6 +19,7 @@ from unittest.mock import MagicMock, patch
 from django.test import TestCase, override_settings
 from django.utils import timezone
 
+from accounts.models import Organization
 from bots.instance_health_alert_manager import (
     ALERT_METADATA,
     BOT_FATAL_ERROR_PERCENTAGE_EXCEEDS_THRESHOLD_MINIMUM_FINISHED_BOTS_COUNT,
@@ -33,7 +34,7 @@ from bots.instance_health_alert_manager import (
     update_alert_settings,
 )
 from bots.instance_health_utils import CONNECTION_DANGER_PERCENTAGE, WORKER_SILENCE_CONFIRMED_AFTER_SECONDS
-from bots.models import InstanceHealthAlertsState, InstanceHealthSnapshot
+from bots.models import Bot, BotStates, InstanceHealthAlertsState, InstanceHealthSnapshot, Project
 
 # Doubles as the patch target for the module's own globals and as the name of the
 # logger it reports state changes and failures on.
@@ -47,6 +48,7 @@ WORKERS_DOWN = InstanceHealthAlertTypes.CELERY_WORKERS_DOWN
 QUEUE_NOT_DRAINING = InstanceHealthAlertTypes.CELERY_QUEUE_NOT_DRAINING
 FATAL_ERROR_COUNT = InstanceHealthAlertTypes.BOT_FATAL_ERROR_COUNT_EXCEEDS_THRESHOLD
 FATAL_ERROR_PERCENTAGE = InstanceHealthAlertTypes.BOT_FATAL_ERROR_PERCENTAGE_EXCEEDS_THRESHOLD
+BOT_NOT_LAUNCHED = InstanceHealthAlertTypes.BOT_NOT_LAUNCHED_BY_JOIN_TIME
 
 NO_WORKERS = {"worker_count": 0, "workers": {}}
 ONE_WORKER = {"worker_count": 1, "workers": {"celery@one": {"concurrency": 4, "processes_alive": 4}}}
@@ -320,6 +322,59 @@ class BotFatalErrorPercentageAlertTestCase(SingleAlertMixin, TestCase):
         _create_fatal_error_reading(0, 0)
 
         self.assertNotFiring(threshold=0)
+
+
+class BotNotLaunchedByJoinTimeAlertTestCase(SingleAlertMixin, TestCase):
+    """Oct 22-24 2026: every worker slot was held and scheduled bots sat unlaunched for two days unnoticed."""
+
+    alert = BOT_NOT_LAUNCHED
+
+    def setUp(self):
+        organization = Organization.objects.create(name="Test Org")
+        self.project = Project.objects.create(organization=organization, name="Test Project")
+
+    def _create_bot(self, state=BotStates.SCHEDULED, join_at=None, created_at=None, heartbeat=False):
+        bot = Bot.objects.create(project=self.project, name="Test Bot", meeting_url="https://meet.google.com/abc-defg-hij", state=state, join_at=join_at)
+        updates = {}
+        if created_at is not None:
+            updates["created_at"] = created_at
+        if heartbeat:
+            updates["first_heartbeat_timestamp"] = int(timezone.now().timestamp())
+        if updates:
+            Bot.objects.filter(pk=bot.pk).update(**updates)
+        return bot
+
+    def test_a_scheduled_bot_still_waiting_past_its_join_time_fires(self):
+        self._create_bot(join_at=timezone.now() - timedelta(minutes=10))
+
+        self.assertFiring(threshold=300)
+
+    def test_a_bot_inside_the_grace_period_does_not_fire(self):
+        self._create_bot(join_at=timezone.now() - timedelta(minutes=2))
+
+        self.assertNotFiring(threshold=300)
+
+    def test_a_bot_that_started_running_does_not_fire(self):
+        # Waiting in the lobby or recording: a worker has it, so the queue is not the problem.
+        self._create_bot(state=BotStates.WAITING_ROOM, join_at=timezone.now() - timedelta(minutes=10), heartbeat=True)
+        self._create_bot(state=BotStates.JOINING, join_at=timezone.now() - timedelta(minutes=10), heartbeat=True)
+
+        self.assertNotFiring(threshold=300)
+
+    def test_an_ad_hoc_bot_with_no_join_time_is_due_when_it_is_created(self):
+        self._create_bot(state=BotStates.JOINING, created_at=timezone.now() - timedelta(minutes=10))
+
+        self.assertFiring(threshold=300)
+
+    def test_a_bot_that_already_finished_does_not_fire(self):
+        self._create_bot(state=BotStates.FATAL_ERROR, join_at=timezone.now() - timedelta(minutes=10))
+
+        self.assertNotFiring(threshold=300)
+
+    def test_a_bot_due_more_than_a_day_ago_is_left_to_the_cleanup(self):
+        self._create_bot(join_at=timezone.now() - timedelta(hours=25))
+
+        self.assertNotFiring(threshold=300)
 
 
 class GetAlertConfigsTestCase(TestCase):
