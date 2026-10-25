@@ -10,8 +10,15 @@ from bots.models import Bot, BotStates
 
 logger = logging.getLogger(__name__)
 
+# Backstop for a run that never ends. Celery's parent process kills the task at the hard limit even if the bot's
+# main loop ignores everything else, which frees the worker slot. It must stay under the broker visibility_timeout
+# (21600s by default, see attendee/celery.py) or the killed task would be redelivered. The soft limit comes first so
+# the bot gets a chance to leave and upload what it recorded before the kill.
+RUN_BOT_TIME_LIMIT_SECONDS = int(os.getenv("RUN_BOT_TIME_LIMIT_SECONDS", 18000))
+RUN_BOT_SOFT_TIME_LIMIT_SECONDS = RUN_BOT_TIME_LIMIT_SECONDS - 600
 
-@shared_task(bind=True, soft_time_limit=3600)
+
+@shared_task(bind=True, soft_time_limit=RUN_BOT_SOFT_TIME_LIMIT_SECONDS, time_limit=RUN_BOT_TIME_LIMIT_SECONDS)
 def run_bot(self, bot_id):
     bot = Bot.objects.get(id=bot_id)
     # Guard against broker redelivery: re-running a finished bot risks clobbering its recording (issue #587).

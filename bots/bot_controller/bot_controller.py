@@ -1068,6 +1068,7 @@ class BotController:
 
         # Add timeout just for audio processing
         self.first_timeout_call = True
+        self.last_ended_in_another_run_check_at = time.time()
         GLib.timeout_add(100, self.on_main_loop_timeout)
 
         # Add signal handlers so that when we get a SIGTERM or SIGINT, we can clean up the bot
@@ -1402,7 +1403,20 @@ class BotController:
         if self.bot_in_db.last_heartbeat_timestamp is None or self.bot_in_db.last_heartbeat_timestamp <= int(timezone.now().timestamp()) - 60:
             self.bot_in_db.set_heartbeat()
 
+    def bot_ended_in_another_run(self):
+        # Checked about once a minute, alongside the heartbeat, so it costs one small query.
+        if time.time() - self.last_ended_in_another_run_check_at < 60:
+            return False
+        self.last_ended_in_another_run_check_at = time.time()
+        self.bot_in_db.refresh_from_db(fields=["state"])
+        return self.bot_in_db.state in BotStates.post_meeting_states()
+
     def on_main_loop_timeout(self):
+        # A finished run leaves this callback on GLib's default context, which every later run in the same
+        # worker process shares. Removing it here stops an old bot from being serviced inside a new bot's loop.
+        if self.cleanup_called:
+            return False
+
         try:
             if self.first_timeout_call:
                 logger.info("First timeout call - taking initial action")
@@ -1412,6 +1426,13 @@ class BotController:
 
             # Set heartbeat
             self.set_bot_heartbeat()
+
+            # A redelivered run_bot task (issue #587) can start a loop for a bot another run already finished.
+            # Nothing would ever end that loop, and it would hold a Celery worker slot until the worker restarts.
+            if self.bot_ended_in_another_run():
+                logger.warning(f"Bot {self.bot_in_db.id} is already {BotStates.state_to_api_code(self.bot_in_db.state)}, so this run has nothing to do. Shutting it down.")
+                self.cleanup()
+                return False
 
             # Process audio chunks
             self.per_participant_non_streaming_audio_input_manager.process_chunks()
