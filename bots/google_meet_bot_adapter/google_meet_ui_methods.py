@@ -536,7 +536,13 @@ class GoogleMeetUIMethods:
         logger.info("Found 'Captions and translation' variant of captions button. Pressing 'c' to enable captions...")
         ActionChains(self.driver).send_keys("c").perform()
         logger.info("Waiting for captions to be enabled...")
-        WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Captions and translation"][aria-pressed="true"]')))
+        try:
+            WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Captions and translation"][aria-pressed="true"]')))
+        except TimeoutException:
+            # The bot is in the meeting either way. Letting this timeout reach click_captions_button would press 'c'
+            # again on its next attempt, which turns captions back off, and the bot would fail inside a live call.
+            logger.warning("Pressed 'c' but could not confirm captions were enabled. Continuing, since the bot is in the meeting")
+            return
         logger.info("Confirmed captions were enabled")
 
     def click_captions_button(self):
