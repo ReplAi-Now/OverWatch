@@ -125,6 +125,7 @@ class WebBotAdapter(BotAdapter):
 
         self.should_create_debug_recording = should_create_debug_recording
         self.debug_screen_recorder = None
+        self.display = None
 
         self.silence_detection_activated = False
         self.joined_at = None
@@ -1204,6 +1205,19 @@ class WebBotAdapter(BotAdapter):
                 logger.warning(f"Error shutting down websocket server: {e}")
 
         self.cleaned_up = True
+
+    def stop_virtual_display(self):
+        # The bot runs in a celery child that exits after the task, and Xvfb would outlive it. Stopped last because the
+        # screen recorder reads this display until its own cleanup. Oct 29 to Nov 3 2026: 33 leaked displays exhausted
+        # the worker, Chrome could not start and bots failed with ui_element_not_found.
+        if not self.display:
+            return
+        try:
+            self.display.stop()
+            logger.info(f"Stopped virtual display {self.display.new_display_var}")
+        except Exception as e:
+            logger.warning(f"Error stopping virtual display: {e}")
+        self.display = None
 
     def domain_for_history_entry_url(self, url):
         try:

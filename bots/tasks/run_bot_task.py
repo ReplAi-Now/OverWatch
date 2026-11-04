@@ -1,6 +1,7 @@
 import logging
 import os
 import signal
+import subprocess
 
 from celery import shared_task
 from celery.signals import worker_shutting_down
@@ -19,8 +20,31 @@ def run_bot(self, bot_id):
         logger.warning(f"Bot {bot_id} is already in post-meeting state {BotStates.state_to_api_code(bot.state)}, skipping run_bot")
         return
     logger.info(f"Running bot {bot_id}")
+    kill_orphaned_xvfb_processes()
     bot_controller = BotController(bot_id)
     bot_controller.run()
+
+
+def kill_orphaned_xvfb_processes():
+    # Each bot starts its own Xvfb from a celery child that exits after the task. When a run dies before its cleanup
+    # (hard time limit, crash), the Xvfb is reparented to PID 1 and lives on. A running bot's Xvfb always has its
+    # celery child as parent, so a PID 1 parent means the bot that started it is gone.
+    try:
+        out = subprocess.run(["ps", "-eo", "pid=,ppid=,comm="], capture_output=True, text=True, timeout=5).stdout
+    except Exception as e:
+        logger.warning(f"Could not list processes to find orphaned Xvfb: {e}")
+        return
+    for line in out.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) != 3 or parts[2] != "Xvfb" or parts[1] != "1":
+            continue
+        try:
+            os.kill(int(parts[0]), signal.SIGKILL)
+            logger.warning(f"Killed orphaned Xvfb process {parts[0]}")
+        except ProcessLookupError:
+            pass
+        except Exception as e:
+            logger.warning(f"Could not kill orphaned Xvfb process {parts[0]}: {e}")
 
 
 def kill_child_processes():

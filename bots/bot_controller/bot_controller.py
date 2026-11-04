@@ -729,6 +729,9 @@ class BotController:
             logger.info("Telling websocket client manager to cleanup...")
             self.websocket_client_manager.cleanup()
 
+        if self.adapter:
+            self.adapter.stop_virtual_display()
+
         recording_file_location = self.get_recording_file_location()
         if recording_file_location and not self.local_recording_file_has_content(recording_file_location):
             # Skip upload of a missing/empty file so we don't overwrite an existing recording (issue #587).
