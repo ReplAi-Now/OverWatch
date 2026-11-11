@@ -12,7 +12,15 @@ from bots.models import Bot, BotStates
 logger = logging.getLogger(__name__)
 
 
-@shared_task(bind=True, soft_time_limit=3600)
+# The soft limit makes the controller clean up; cleanup force-kills itself after 600s (BotController.cleanup). The hard
+# limit is the backstop for a run that never reaches cleanup, so a wedged bot cannot hold a worker slot for good. It must
+# stay below the broker visibility_timeout (attendee/celery.py) or the task is redelivered first. Oct 22-24 2026: two
+# runs whose bots had ended never returned, held the worker's slots, and no bot launched for two days.
+RUN_BOT_SOFT_TIME_LIMIT_SECONDS = 3600
+RUN_BOT_TIME_LIMIT_SECONDS = RUN_BOT_SOFT_TIME_LIMIT_SECONDS + 900
+
+
+@shared_task(bind=True, soft_time_limit=RUN_BOT_SOFT_TIME_LIMIT_SECONDS, time_limit=RUN_BOT_TIME_LIMIT_SECONDS)
 def run_bot(self, bot_id):
     bot = Bot.objects.get(id=bot_id)
     # Guard against broker redelivery: re-running a finished bot risks clobbering its recording (issue #587).
