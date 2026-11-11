@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 from django.test import TestCase
 
 from accounts.models import Organization
+from attendee.celery import broker_transport_options
 from bots.models import Bot, BotStates, Project
 from bots.tasks.run_bot_task import kill_orphaned_xvfb_processes, run_bot
 
@@ -48,3 +49,12 @@ class KillOrphanedXvfbTestCase(TestCase):
         with patch("bots.tasks.run_bot_task.subprocess.run", side_effect=FileNotFoundError("ps")), patch("bots.tasks.run_bot_task.os.kill") as mock_kill:
             kill_orphaned_xvfb_processes()
         mock_kill.assert_not_called()
+
+
+class RunBotTimeLimitTestCase(TestCase):
+    """Oct 22-24 2026: run_bot tasks that never returned held every worker slot and no bot launched for two days."""
+
+    def test_has_a_hard_time_limit_below_the_visibility_timeout(self):
+        self.assertIsNotNone(run_bot.time_limit)
+        self.assertGreater(run_bot.time_limit, run_bot.soft_time_limit)
+        self.assertLess(run_bot.time_limit, broker_transport_options["visibility_timeout"])
