@@ -3,10 +3,12 @@
 ## Done
 
 - [x] Oct 24 2026: upstream redelivery fix deployed (run_bot skips finished bots, broker visibility_timeout 6h). Came in with Adam's version bump.
+- [x] Nov 4 2026: Meet join failures fix merged and deployed (captions variant, `/meet/<code>` links, Xvfb leak).
+- [x] Nov 12 2026: Worker restarted by hand at 11:17 UTC. From Nov 8 to Nov 12 every bot failed in seconds (`SessionNotCreatedException`, `[Errno 11]`): the container ran out of process room after 8 days up.
 
 ## In progress
 
-- [ ] Meet join failures (branch `fix/meet-join-failures`): upstream "Captions and translation" button fix, upstream `meet.google.com/meet/<code>` link fix, stop each bot's Xvfb display and kill orphaned ones.
+- [ ] Process census logging (branch `feat/process-census-logging`): every bot logs `Process census before/after bot N` with process, thread and zombie counts and the top process names. Once it is deployed, read those lines a few days later to see which process piles up, then fix that leak.
 
 - [ ] Zombie run_bot tasks (branch `fix/zombie-run-bot-tasks`): a run whose bot ended elsewhere shuts itself down, leftover GLib callbacks remove themselves, hard 5h task limit, and a "bot not launched by its join time" instance health alert.
 
@@ -21,4 +23,5 @@
 
 ## Known issues
 
+- Something still leaks processes in "OverWatch Worker" after the Xvfb fix. Until it is found, expect bots to start failing about a week after each restart or deploy.
 - Bots left in the Meet lobby time out after 10 minutes if nobody admits them (Oct 25: CUGINI, patterned Threads).

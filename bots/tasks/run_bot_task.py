@@ -20,9 +20,55 @@ def run_bot(self, bot_id):
         logger.warning(f"Bot {bot_id} is already in post-meeting state {BotStates.state_to_api_code(bot.state)}, skipping run_bot")
         return
     logger.info(f"Running bot {bot_id}")
+    log_process_census(f"before bot {bot_id}")
     kill_orphaned_xvfb_processes()
-    bot_controller = BotController(bot_id)
-    bot_controller.run()
+    try:
+        bot_controller = BotController(bot_id)
+        bot_controller.run()
+    finally:
+        log_process_census(f"after bot {bot_id}")
+
+
+def log_process_census(label):
+    # Bots share one long-lived worker container, so anything a bot leaves behind piles up until Chrome cannot start
+    # (Nov 8-12 2026: EAGAIN, "user data directory is already in use"). Log what is alive around every bot so the
+    # next leak names itself. Reads /proc instead of running ps, because forking is exactly what fails when we are out.
+    try:
+        procs = zombies = threads = 0
+        by_comm, zombie_comm, orphan_comm = {}, {}, {}
+        for pid in os.listdir("/proc"):
+            if not pid.isdigit():
+                continue
+            try:
+                with open(f"/proc/{pid}/stat") as f:
+                    stat = f.read()
+            except OSError:
+                continue
+            comm = stat[stat.find("(") + 1 : stat.rfind(")")]
+            fields = stat[stat.rfind(")") + 2 :].split()
+            state, ppid, num_threads = fields[0], fields[1], int(fields[17])
+            procs += 1
+            threads += num_threads
+            by_comm[comm] = by_comm.get(comm, 0) + 1
+            if state == "Z":
+                zombies += 1
+                zombie_comm[comm] = zombie_comm.get(comm, 0) + 1
+            elif ppid == "1" and pid != "1":
+                orphan_comm[comm] = orphan_comm.get(comm, 0) + 1
+
+        def top(counts):
+            return dict(sorted(counts.items(), key=lambda kv: -kv[1])[:10])
+
+        limits = {}
+        for name, path in (("pids_current", "/sys/fs/cgroup/pids.current"), ("pids_max", "/sys/fs/cgroup/pids.max"), ("threads_max", "/proc/sys/kernel/threads-max")):
+            try:
+                with open(path) as f:
+                    limits[name] = f.read().strip()
+            except OSError:
+                pass
+        logger.info(f"Process census {label}: processes={procs} threads={threads} zombies={zombies} limits={limits} top={top(by_comm)} zombie_top={top(zombie_comm)} orphans_top={top(orphan_comm)}")
+    except Exception as e:
+        logger.warning(f"Process census {label} failed: {e}")
 
 
 def kill_orphaned_xvfb_processes():
