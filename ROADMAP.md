@@ -8,13 +8,15 @@
 
 ## In progress
 
-- [ ] Process census logging (branch `feat/process-census-logging`): every bot logs `Process census before/after bot N` with process, thread and zombie counts and the top process names. Once it is deployed, read those lines a few days later to see which process piles up, then fix that leak.
+- [x] Nov 12 2026: process census logging merged and deployed. Nov 14 it named the leak: dead Chrome processes (309 zombies after bot 208) held by celery, which runs as PID 1 because the Railway start command skips tini.
+- [ ] Zombie reaping + blocked-bot ending (branch `fix/zombie-reaping-and-blocked-bot`): each run_bot adopts and reaps the Chrome processes it orphans, and a bot Google blocks repeatedly ends as a fatal error instead of staying "joining" (the pod restart path only works under Kubernetes). Not merged; merging deploys.
 
 - [ ] Zombie run_bot tasks (branch `fix/zombie-run-bot-tasks`): a run whose bot ended elsewhere shuts itself down, leftover GLib callbacks remove themselves, hard 5h task limit, and a "bot not launched by its join time" instance health alert.
 
 ## Next steps
 
 - Set `ENABLE_WAITING_ROOM_STATE_FOR_WEB_BOTS=true` on "OverWatch Worker" so a bot knocking in the Meet lobby reports `waiting_room` to the Admin app instead of `joining`. Then the Admin app can tell the rep to let it in.
+- Google Meet refuses our anonymous bots ("You can't join this video call") since about Nov 12 2026: bots 206, 207, 208 on three different meetings. Upstream's answer is a signed-in bot on a dedicated paid Google Workspace account (docs/signed_in_bots.md). Decision pending.
 - Sync upstream: the fork is 118 commits behind attendee-labs/attendee (Nov 4 2026).
 
 - Turn on instance health alerts in production: set `SAVE_INSTANCE_HEALTH_SNAPSHOTS=true` and `SLACK_WEBHOOK_URL_FOR_INSTANCE_HEALTH_ALERTS` on "OverWatch Scheduler". Until then no OverWatch alert reaches Slack.
@@ -23,5 +25,5 @@
 
 ## Known issues
 
-- Something still leaks processes in "OverWatch Worker" after the Xvfb fix. Until it is found, expect bots to start failing about a week after each restart or deploy.
+- Until the zombie reaping branch is deployed, the worker still climbs toward its 1000 pid limit (571 on Nov 14) and needs a restart roughly weekly.
 - Bots left in the Meet lobby time out after 10 minutes if nobody admits them (Oct 25: CUGINI, patterned Threads).
