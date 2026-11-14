@@ -20,13 +20,45 @@ def run_bot(self, bot_id):
         logger.warning(f"Bot {bot_id} is already in post-meeting state {BotStates.state_to_api_code(bot.state)}, skipping run_bot")
         return
     logger.info(f"Running bot {bot_id}")
+    become_child_subreaper()
     log_process_census(f"before bot {bot_id}")
     kill_orphaned_xvfb_processes()
     try:
         bot_controller = BotController(bot_id)
         bot_controller.run()
     finally:
+        reap_zombie_children()
         log_process_census(f"after bot {bot_id}")
+
+
+def become_child_subreaper():
+    # Railway starts the worker without tini, so celery is PID 1 and never reaps the Chrome processes that get
+    # reparented to it when a bot kills chromedriver: 309 zombies after bot 208 (Nov 14 2026), the same climb that
+    # exhausted the pid limit Nov 8-12. As a subreaper this celery child adopts those orphans and can reap them itself.
+    try:
+        import ctypes
+
+        PR_SET_CHILD_SUBREAPER = 36
+        if ctypes.CDLL(None, use_errno=True).prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0:
+            logger.warning(f"Could not become child subreaper: errno {ctypes.get_errno()}")
+    except Exception as e:
+        logger.warning(f"Could not become child subreaper: {e}")
+
+
+def reap_zombie_children():
+    reaped = 0
+    try:
+        while True:
+            pid, _ = os.waitpid(-1, os.WNOHANG)
+            if pid == 0:
+                break
+            reaped += 1
+    except ChildProcessError:
+        pass
+    except Exception as e:
+        logger.warning(f"Error reaping zombie children: {e}")
+    if reaped:
+        logger.info(f"Reaped {reaped} exited child processes")
 
 
 def log_process_census(label):

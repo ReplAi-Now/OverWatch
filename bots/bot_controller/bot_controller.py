@@ -2057,6 +2057,22 @@ class BotController:
                 self.cleanup()
                 return
 
+            # Pods only exist under Kubernetes. On a celery worker the restart task crashes on the missing kube config
+            # and the bot is left in "joining" forever (bot 208, Nov 14 2026), so end it here instead.
+            if os.getenv("LAUNCH_BOT_METHOD") != "kubernetes":
+                logger.info("Received message that we were blocked by platform repeatedly but bots do not run in pods, so not recreating pod")
+
+                new_bot_event = BotEventManager.create_event(
+                    bot=self.bot_in_db,
+                    event_type=BotEventTypes.FATAL_ERROR,
+                    event_sub_type=BotEventSubTypes.FATAL_ERROR_UI_ELEMENT_NOT_FOUND,
+                    event_metadata={
+                        "blocked_by_platform_repeatedly": True,
+                    },
+                )
+                self.cleanup()
+                return
+
             logger.info("Received message that we were blocked by platform repeatedly, so recreating pod")
             # Run task to restart the bot pod with 1 minute delay
             restart_bot_pod.apply_async(args=[self.bot_in_db.id], countdown=60)
