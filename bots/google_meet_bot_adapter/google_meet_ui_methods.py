@@ -168,11 +168,28 @@ class GoogleMeetUIMethods:
             logger.warning("Someone in the call actively denied our request to join. Raising UiRequestToJoinDeniedException")
             raise UiRequestToJoinDeniedException("Someone in the call denied your request to join", step)
         elif any(text in element_text for text in no_one_responded_texts):
-            logger.warning("No one responded to our request to join (timeout). Raising UiRequestToJoinDeniedException")
+            # Meet expires an unanswered knock after a few minutes, long before our waiting_room_timeout_seconds. Nobody
+            # refused us, so knock again, the way a person would; the caller's waiting room timeout still bounds it.
+            # Nov 2026: a host who looked at the lobby a few minutes late found the bot had already given up for good.
+            if self.ask_to_join_again(step):
+                return
+            logger.warning("No one responded to our request to join (timeout) and could not ask again. Raising UiRequestToJoinDeniedException")
             raise UiRequestToJoinDeniedException("No one responded to your request to join the call", step)
         else:  # "You left the meeting"
             logger.warning("Saw 'You left the meeting' element. Happens if someone actively denied our request to join. Raising UiRequestToJoinDeniedException")
             raise UiRequestToJoinDeniedException("You left the meeting", step)
+
+    def ask_to_join_again(self, step):
+        ask_to_join_button = self.find_element_by_selector(By.XPATH, self.join_now_button_selector())
+        if not ask_to_join_button:
+            return False
+        try:
+            self.click_element(ask_to_join_button, step)
+        except UiCouldNotClickElementException:
+            logger.warning("Found the 'Ask to join' button after an unanswered knock but could not click it")
+            return False
+        logger.info("No one responded to our request to join, so asked to join again")
+        return True
 
     def look_for_asking_to_be_let_in_element_after_waiting_period_expired(self, step):
         asking_to_be_let_in_element = self.find_element_by_selector(
